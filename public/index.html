@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#171821"><title>Talkz Cloud</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="authScreen" class="auth-screen">
+  <div class="auth-brand"><div class="brand-mark">T</div><div><b>Talkz</b><small>YOUR PEOPLE. YOUR PLACE.</small></div></div>
+  <section class="auth-card">
+    <div class="auth-badge">☁ TALKZ CLOUD</div>
+    <h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in and pick up where you left off.</p>
+    <form id="authForm">
+      <label for="username">USERNAME</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="24" required placeholder="your_username">
+      <div id="displayNameWrap" class="hidden"><label for="displayName">DISPLAY NAME</label><input id="displayName" name="displayName" maxlength="32" placeholder="What people call you"></div>
+      <label for="password">PASSWORD</label><input id="password" name="password" type="password" autocomplete="current-password" minlength="10" required placeholder="At least 10 characters">
+      <button class="primary auth-submit" id="authSubmit">Sign in</button>
+    </form>
+    <div id="authError" class="auth-error hidden"></div>
+    <p class="auth-switch"><span id="switchCopy">New to Talkz?</span> <button id="switchAuth" type="button">Create an account</button></p>
+    <div class="auth-foot"><span class="live-dot"></span> Talkz Cloud · connected to your community</div>
+  </section>
+</div>
+<div id="app" class="app hidden">
+  <aside class="servers">
+    <button class="server-icon brand-mini active" id="homeBtn" title="Talkz Home">T</button>
+    <div class="server-divider"></div><div id="serverList" class="server-list"></div>
+    <button class="server-icon add" id="addServer" title="Create a server">＋</button>
+  </aside>
+  <aside class="channels">
+    <header class="workspace-head"><button id="workspaceName" class="workspace-name">Talkz <span>⌄</span></button><span class="cloud-status"><i></i> CLOUD</span></header>
+    <div class="profile-line"><div class="avatar me-avatar" id="myAvatar">Y</div><div class="profile-meta"><b id="myName">You</b><small id="myHandle">@you</small></div><button id="logoutBtn" title="Sign out">↪</button></div>
+    <div class="section-label"><span>TEXT CHANNELS</span><button id="addChannel" title="Create channel">＋</button></div>
+    <div id="channelList" class="channel-list"></div>
+    <div class="sidebar-footer"><span class="live-dot"></span><span>Messages sync through Talkz Cloud</span></div>
+  </aside>
+  <main class="chat">
+    <header class="chat-head"><div class="channel-title"><span id="channelHash">#</span><strong id="chatTitle">general</strong><span class="head-divider"></span><span id="topic">The place for everything.</span></div><div class="head-actions"><span class="sync-label"><i></i> LIVE</span><button class="icon-btn" id="membersBtn" title="Show members">♙</button></div></header>
+    <div class="chat-body"><section id="messages" class="messages"></section><div id="welcome" class="welcome hidden"><div class="welcome-mark">T</div><h2>Welcome to <span>Talkz Cloud</span></h2><p>This is the beginning of this channel. Say something!</p></div>
+    <form id="composer" class="composer"><button type="button" class="composer-plus" id="emojiBtn" title="Add emoji">☺</button><input id="messageInput" maxlength="2000" autocomplete="off" placeholder="Message #general" aria-label="Message"><button type="submit" class="send-btn" title="Send message">➤</button></form><div class="composer-hint">Keep it friendly. <span>•</span> <b>Talkz Cloud</b></div></div>
+  </main>
+  <aside id="membersPanel" class="members"><div class="members-title">MEMBERS</div><div id="memberList"></div></aside>
+</div>
+<div id="toast" class="toast" role="status"></div>
+<div id="modalLayer" class="modal-layer hidden"><section class="modal" role="dialog" aria-modal="true"><button id="modalClose" class="modal-close">×</button><div id="modalContent"></div></section></div>
+<script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+</body></html>
