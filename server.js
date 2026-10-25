@@ -1,4 +1,4 @@
-/* Talkz Cloud — server.js (Phase 1: Part 1 fixes; Phase 2: accounts + storage)
+/* Talkz Cloud server.js (Phase 1: Part 1 fixes; Phase 2: accounts + storage)
  * See ARCHITECTURE.md for tables, routes, socket events and the permission model.
  * Phase 1 notes:
  *  - The supplied codebase had NO file-upload, webhook, friend or view_role code at all.
