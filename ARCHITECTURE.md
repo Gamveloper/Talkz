@@ -1,4 +1,4 @@
-# Talkz Cloud — Architecture (Phases 1–2)
+# Talkz Cloud — Architecture (Phases 1–2.1)
 
 Single-process Node 20 app: Express 4 REST API + Socket.IO 4 realtime on one HTTP
 server, PostgreSQL via `pg` (parameterised queries only), sessions in Postgres
@@ -9,7 +9,7 @@ build step. Deployed on Render (web service + Postgres, free tier).
 
 | Table | Purpose / notes |
 |---|---|
-| `profiles` | Users. `username` unique, `password_hash` (bcrypt), `display_name`, `status_text`, `email` (nullable, unique case-insensitively when set), `is_bot` — bot profiles (webhooks, tombstone) are hidden from DM/friend lookup and cannot log in. Phase 2 adds `email_verified` (default false), `totp_secret` (base32, only while 2FA is set up/enabled), `totp_enabled`. Email + 2FA state are exposed only on self-scoped responses (`userPrivate`), never on public profiles. |
+| `profiles` | Users. `username` unique, `password_hash` (bcrypt), `display_name`, `status_text`, `is_bot` — bot profiles (webhooks, tombstone) are hidden from DM/friend lookup and cannot log in. Phase 2 adds `totp_secret` (base32, only while 2FA is set up/enabled), `totp_enabled`. 2FA state is exposed only on self-scoped responses (`userPrivate`), never on public profiles. Phase 2.1 removed email: fresh installs have no `email`/`email_verified` columns (older databases keep theirs, unused, never dropped). |
 | `servers` | `owner_id` → profiles (cascade). |
 | `server_members` | PK (server_id, user_id); `role` in owner/admin/moderator/member (Phase 1 keeps the fixed 4-role scheme; bitfield roles are a later phase). |
 | `channels` | `kind` text/voice/announcement, `position`, `view_role` — minimum rank that can view the channel. Unique index on (server_id, lower(name)) after automatic dedupe at startup. |
@@ -18,7 +18,7 @@ build step. Deployed on Render (web service + Postgres, free tier).
 | `invites` | `code` PK, `max_uses`, `expires_at`, `uses`. |
 | `dm_conversations` / `dm_members` / `dm_messages` | 1-to-1 DMs (group DMs are a later phase). dm_messages has the same compound-cursor index. |
 | `files` | Uploads: metadata + `data BYTEA` (Postgres storage) or bucket object (`storage` = `postgres`/`s3`, `storage_key` set in S3 mode — Phase 2), `uploader_id`, nullable `message_id` / `dm_message_id`, both ON DELETE CASCADE. Unattached rows older than 1 h are swept every 15 min; in S3 mode the sweep also deletes the bucket object and reconciles objects whose row vanished another way (once older than `S3_SWEEP_MIN_AGE_MS`). |
-| `account_tokens` | Phase 2: email-verification + password-reset tokens. Only the SHA-256 hash is stored; `purpose`, the address the token was issued for, `expires_at` (24 h / 1 h), `used_at`. Consumption is a single atomic UPDATE (single-use); issuing a new token burns the user's previous unused ones of that purpose. |
+| `account_tokens` | Removed in Phase 2.1 with the email features: not created on fresh installs; on older databases the table is left in place, unused. |
 | `recovery_codes` | Phase 2: TOTP recovery codes — SHA-256 hashes only, `used_at` for single-use. Replaced wholesale when 2FA is enabled; deleted when disabled. |
 | `webhooks` | `channel_id`, `bot_user_id` → profiles (SET NULL), `token_hash` (SHA-256; plaintext shown once). |
 | `user_sessions` | Managed by connect-pg-simple. |
@@ -48,15 +48,13 @@ Auth/account: `POST /api/auth/register|login|logout|logout-all`,
 `GET /api/ice` (STUN always; TURN when `TURN_URL/USERNAME/CREDENTIAL` are set),
 `GET /api/health`.
 
-Phase 2 accounts: `POST /api/auth/verify-email` + `GET /api/auth/verify-email`
-(email link → redirect back to the app), `POST /api/auth/resend-verification`,
-`POST /api/auth/forgot-password` (always the same generic 200),
-`POST /api/auth/reset-password`, `POST /api/auth/login/2fa` (completes a
-sign-in that returned `twoFactorRequired`), `POST /api/me/2fa/setup|enable|disable`.
+Phase 2 accounts: `POST /api/auth/login/2fa` (completes a
+sign-in that returned `twoFactorRequired`), `POST /api/me/2fa/setup|enable|disable`,
+`POST /api/me/password` (change password, current password required — Phase 2.1).
 Login for a 2FA account stores a short-lived `pending2fa` marker in the
-session (5 min, max 5 attempts) instead of `userId`. Email change rides the
-existing `PATCH /api/me` (optional `email` field; resets verification and
-mails a fresh link).
+session (5 min, max 5 attempts) instead of `userId`. Phase 2.1 removed every
+email route (`verify-email`, `resend-verification`, `forgot-password`,
+`reset-password` — now JSON 404) and deleted `lib/mailer.js`.
 
 Servers/channels: `GET|POST /api/servers`, `PATCH|DELETE /api/servers/:serverId`,
 `POST /api/servers/:serverId/leave`, `GET /api/servers/:serverId/members`,
@@ -109,23 +107,15 @@ survive re-broadcasts and eviction works on remote sockets.
   60/min; webhook ingest 30/min) plus per-user (messages 60/min, uploads 20/10 min,
   invites 10/10 min, DM starts 20/10 min). `trust proxy` is on in production so
   per-IP limits key on the real client behind Render.
-- **Account tokens (Phase 2):** verification/reset tokens are 32 random bytes,
-  base64url; only SHA-256 hashes persist, consumption is atomic and single-use,
-  and `forgot-password` returns a byte-identical generic body for known and
-  unknown addresses. Token endpoints additionally sit behind a per-IP hourly
-  cap (`ACCOUNT_RATE_LIMIT`, default 60) and resend behind a per-user cap
-  (10/hour). A completed reset deletes every `user_sessions` row for the
-  account and disconnects its sockets.
+- **No email (Phase 2.1):** no email addresses, verification or emailed
+  reset links anywhere. Password changes happen signed-in via
+  `POST /api/me/password` (current password required, new password 10–72
+  chars, must differ) and end every other session for the account.
 - **2FA (Phase 2):** TOTP per RFC 6238 (SHA-1, 6 digits, ±1 step window),
   implemented with Node crypto in `lib/totp.js` and verified against the RFC
   Appendix B vectors in tests. Secrets are generated per user (shown once as
   text/otpauth URI — no QR dependency); recovery codes are 10 single-use
   values, hashed at rest, shown once.
-- **Mail (Phase 2):** `lib/mailer.js` — Resend HTTPS API when
-  `RESEND_API_KEY`+`MAIL_FROM` are set, else SMTP via nodemailer when
-  `SMTP_HOST`+`MAIL_FROM` are set, else an explicit unconfigured mode: links
-  are logged server-side and API responses report `configured: false`. Sends
-  never block or fail the account flow they belong to.
 - **Upload storage (Phase 2):** `lib/storage.js` — when `S3_BUCKET` +
   `S3_ACCESS_KEY_ID` + `S3_SECRET_ACCESS_KEY` are set, new uploads go to the
   bucket under `files/<uuid>` keys (path-style when `S3_ENDPOINT` is set,

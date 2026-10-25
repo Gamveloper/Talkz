@@ -2,7 +2,7 @@
 
 Talkz Cloud is a real server-backed chat MVP with:
 - User registration and sign-in (passwords hashed with bcrypt)
-- Email verification and password reset by email, with optional TOTP two-factor auth (Phase 2)
+- Optional TOTP two-factor auth (Phase 2). No email anywhere: accounts are username + password only (Phase 2.1)
 - Uploads in Postgres, or in an S3-compatible bucket (Cloudflare R2 / AWS S3) with signed-URL downloads (Phase 2)
 - PostgreSQL persistence for users, servers, channels, memberships, and messages
 - Session-based authentication with HTTP-only cookies
@@ -43,7 +43,7 @@ Phase 1 (Part 1 fixes) is implemented — see `ARCHITECTURE.md` for the full mod
 - Compound `(created_at, id)` cursor pagination, channel-name dedupe + unique index at startup.
 - Account basics: change username, delete account (owned servers transfer to the highest-ranked longest-standing member, or are deleted if empty), log out of all devices.
 - Voice: TURN via `TURN_URL`/`TURN_USERNAME`/`TURN_CREDENTIAL` (+ `/api/ice`), speaking indicator, shared mute/deafen state, mic device-loss recovery, reconnect resync.
-- Optional email is collected at registration and used for verification/password-reset mail; threads, unread tracking, custom roles, moderation tooling and presence statuses are **later phases** (see ARCHITECTURE.md and the phase plan).
+- Passwords are changed in **Profile → security** with the current password; there is no emailed reset, so a forgotten password needs the server operator to reset it in the database. Threads, unread tracking, custom roles, moderation tooling and presence statuses are **later phases** (see ARCHITECTURE.md and the phase plan).
 - Free Render services/databases can have limits or sleep/expiry policies that change over time. Check the current Render dashboard/pricing before relying on a free deployment.
 - PostgreSQL SSL uses `rejectUnauthorized: false` in production for compatibility with hosted database certificates. For stricter deployments, configure certificate verification according to your database provider.
 
@@ -52,26 +52,15 @@ Phase 1 (Part 1 fixes) is implemented — see `ARCHITECTURE.md` for the full mod
 Required: `DATABASE_URL`, `SESSION_SECRET` (production).
 Set by the Blueprint: `NODE_ENV=production`, `TRUST_PROXY=true`, `STUN_URL`.
 Optional (sync: false secrets): `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` — when all three are set, `/api/ice` includes the TURN server; otherwise voice falls back to STUN only.
-Tuning: `AUTH_RATE_LIMIT` (default 30 per 15 min), `ACCOUNT_RATE_LIMIT` (default 60 per hour, verification/reset token endpoints).
+Tuning: `AUTH_RATE_LIMIT` (default 30 per 15 min), `ACCOUNT_RATE_LIMIT` (default 60 per hour, the 2FA login-challenge endpoint).
 
-### Email — verification & password reset (Phase 2)
+### Accounts — no email (Phase 2.1)
 
-Accounts work fully without email. To actually SEND mail, set `MAIL_FROM` plus ONE provider:
-
-- **Resend:** `RESEND_API_KEY` (sent via the Resend HTTPS API — no extra setup).
-- **SMTP:** `SMTP_HOST`, `SMTP_PORT` (default 587; 465 implies TLS, or set `SMTP_SECURE=true`), `SMTP_USER`, `SMTP_PASS` (via nodemailer).
-
-`APP_BASE_URL` (e.g. `https://your-app.onrender.com`) is used for the links in those emails; when unset, links are built from the request's host. With NO provider configured the app still runs: signup/reset flows report "email isn't configured on this server" and the action link is written to the server log instead — mail is never silently faked.
-
-How it behaves:
-
-- Registering with an email (or changing your email under **Profile → email & security**) sends a verification link, valid 24 hours. Until clicked, the profile shows the address as unverified; a "Resend verification email" button lives in the same settings section.
-- **Forgot password** (link on the sign-in form) always answers with the same generic message whether or not the address has an account. Reset links are valid 1 hour, work once, and signing in everywhere else is ended when a reset completes.
-- All token links are single-use and only their SHA-256 hash is stored.
+Talkz has no email features at all: no address is collected at registration, there is no verification mail and no emailed password reset, and there is no mail server to configure. Signed-in users change their password under **Profile → security → Change password** (current password required; every other session is signed out). A forgotten password can only be reset by the server operator directly in the database.
 
 ### Two-factor authentication (Phase 2)
 
-Optional per user, under **Profile → email & security → Enable 2FA**: confirm your password, then the app shows a one-time secret as text — a manual key plus the full `otpauth://` URI to paste/type into any authenticator app (no QR dependency). Enter a code from the app to switch 2FA on; you'll get **10 recovery codes, shown once** — save them. Signing in then needs your password AND a 6-digit code (or one recovery code; each works once). Disabling 2FA needs your password plus a valid code. Codes are standard TOTP (RFC 6238), so any authenticator app works.
+Optional per user, under **Profile → security → Enable two-factor authentication**: confirm your password, then the app shows a one-time secret as text — a manual key plus the full `otpauth://` URI to paste/type into any authenticator app (no QR dependency). Enter a code from the app to switch 2FA on; you'll get **10 recovery codes, shown once** — save them. Signing in then needs your password AND a 6-digit code (or one recovery code; each works once). Disabling 2FA needs your password plus a valid code. Codes are standard TOTP (RFC 6238), so any authenticator app works.
 
 ### Object storage for uploads (Phase 2)
 
@@ -86,8 +75,7 @@ TEST_DATABASE_URL=postgres://user:pass@localhost:5432/talkz_test npm test
 ```
 
 The suites: `tests/api.test.js` (Phase 1 behaviour), `tests/accounts.test.js`
-(Phase 2 accounts: verification, reset, mailer, 2FA incl. the RFC 6238 TOTP
-vectors) and `tests/storage.test.js` (Phase 2 storage against a local stub
+(Phase 2 accounts: 2FA incl. the RFC 6238 TOTP vectors, and change-password) and `tests/storage.test.js` (Phase 2 storage against a local stub
 S3 server, plus the Postgres fallback). The Phase 2 suites each use their
 own sibling database (`talkz_test_accounts`, `talkz_test_storage`) so all
 files can run in parallel; they create those databases if missing.
@@ -95,7 +83,6 @@ files can run in parallel; they create those databases if missing.
 ## Project files
 
 - `server.js` — Express API, PostgreSQL schema setup, sessions, Socket.IO
-- `lib/mailer.js` — pluggable email (Resend API or SMTP via nodemailer; logs links when unconfigured)
 - `lib/totp.js` — TOTP two-factor codes (RFC 6238, Node crypto only)
 - `lib/storage.js` — S3-compatible object storage + signed URLs (AWS SDK v3)
 - `lib/exif.js` — JPEG/PNG metadata stripping at upload

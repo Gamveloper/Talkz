@@ -25,21 +25,6 @@ services:
         sync: false
       - key: TURN_CREDENTIAL
         sync: false
-      # Phase 2 — mail (verification + password reset). Set EITHER the Resend
-      # pair or the SMTP set, always with MAIL_FROM. All optional: with none
-      # set the app runs and logs action links server-side instead.
-      - key: RESEND_API_KEY
-        sync: false
-      - key: MAIL_FROM
-        sync: false
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        sync: false
-      - key: SMTP_USER
-        sync: false
-      - key: SMTP_PASS
-        sync: false
       # Phase 2 — S3-compatible object storage for uploads (Cloudflare R2 /
       # AWS S3 / MinIO). All four must be set to enable it; otherwise uploads
       # stay in Postgres. S3_ENDPOINT is only needed for non-AWS stores.
@@ -52,9 +37,6 @@ services:
       - key: S3_ACCESS_KEY_ID
         sync: false
       - key: S3_SECRET_ACCESS_KEY
-        sync: false
-      # Public base URL used in emailed links (e.g. https://your-app.onrender.com)
-      - key: APP_BASE_URL
         sync: false
 
 databases:

@@ -1,13 +1,16 @@
-/* Talkz Cloud — server.js (Phase 1: Part 1 fixes; Phase 2: accounts + storage)
+/* Talkz Cloud — server.js (Phase 1: Part 1 fixes; Phase 2: accounts + storage;
+ * Phase 2.1: ALL email features removed at Rodrigo's request + scrollbar fixes)
  * See ARCHITECTURE.md for tables, routes, socket events and the permission model.
  * Phase 1 notes:
  *  - The supplied codebase had NO file-upload, webhook, friend or view_role code at all.
  *    Files and webhooks are implemented here in minimal, secure form so the Part 1
  *    access-control fixes are real and testable rather than theoretical.
  * Phase 2 notes:
- *  - Accounts: email verification + password reset via single-use, expiring,
- *    SHA-256-hashed tokens (lib/mailer.js is the pluggable sender), and optional
- *    TOTP two-factor auth with recovery codes (lib/totp.js, RFC 6238, Node crypto).
+ *  - Accounts: username + password only — no email anywhere (no address
+ *    collected, no verification mail, no emailed password reset; lib/mailer.js
+ *    is deleted). Optional TOTP two-factor auth with recovery codes
+ *    (lib/totp.js, RFC 6238, Node crypto). Signed-in users change their
+ *    password via POST /api/me/password (current password required).
  *  - Storage: uploads go to S3-compatible object storage when S3_* env vars are
  *    set (lib/storage.js), Postgres BYTEA otherwise; image metadata is stripped
  *    at upload in both modes (lib/exif.js). Downloads stay permission-gated.
@@ -26,7 +29,6 @@ const { Server } = require("socket.io");
 const rateLimit = require("express-rate-limit");
 const { ipKeyGenerator } = require("express-rate-limit");
 const multer = require("multer");
-const mailer = require("./lib/mailer");
 const totp = require("./lib/totp");
 const storage = require("./lib/storage");
 const { stripImageMetadata } = require("./lib/exif");
@@ -128,13 +130,12 @@ function userLimiter(windowMs, limit, message) {
   });
 }
 const uploadLimiter = userLimiter(10 * 60 * 1000, 20, "Too many uploads. Please wait a little.");
-/* Phase 2 — account-token endpoints (forgot/reset/verify/2FA) are per-IP limited;
- * ACCOUNT_RATE_LIMIT overrides the count like AUTH_RATE_LIMIT does for auth. */
+/* The 2FA login-challenge endpoint is per-IP limited on top of the auth
+ * limiter; ACCOUNT_RATE_LIMIT overrides the count like AUTH_RATE_LIMIT does. */
 const tokenRequestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, limit: parseInt(process.env.ACCOUNT_RATE_LIMIT, 10) || 60, standardHeaders: "draft-7", legacyHeaders: false,
   message: { error: "Too many attempts. Please wait a little and try again." }
 });
-const resendLimiter = userLimiter(60 * 60 * 1000, 10, "Too many verification emails requested. Please wait a little.");
 const inviteLimiter = userLimiter(10 * 60 * 1000, 10, "Too many invites created. Please wait a little.");
 const dmStartLimiter = userLimiter(10 * 60 * 1000, 20, "You're starting conversations too fast. Please wait a little."); // doubles as the friend-request budget when friends land in a later phase
 const userMessageLimiter = userLimiter(60 * 1000, 60, "You're sending messages too fast. Slow down a little.");
@@ -147,9 +148,9 @@ for (const name of ["serverId", "channelId", "messageId", "conversationId", "use
 const asyncRoute = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const clean = (value, max = 100) => String(value ?? "").replace(/\u0000/g, "").trim().slice(0, max);
 const userPublic = row => ({ id: row.id, username: row.username, displayName: row.display_name, statusText: row.status_text || "", createdAt: row.created_at, isBot: !!row.is_bot });
-/* Phase 2 — the account owner's own view (auth responses + /api/me only; never
- * used for other users, so email/2FA state can't leak into member lists). */
-const userPrivate = row => ({ ...userPublic(row), email: row.email || null, emailVerified: !!row.email_verified, totpEnabled: !!row.totp_enabled });
+/* The account owner's own view (auth responses + /api/me only; never used
+ * for other users, so 2FA state can't leak into member lists). */
+const userPrivate = row => ({ ...userPublic(row), totpEnabled: !!row.totp_enabled });
 const RANK = { owner: 3, admin: 2, moderator: 1, member: 0 };
 const isMod = role => (RANK[role] ?? -1) >= 1;
 const canView = (role, viewRole) => role != null && (RANK[role] ?? -1) >= (RANK[viewRole || "member"] ?? 0);
@@ -280,11 +281,11 @@ async function initializeDatabase() {
     );
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS status_text TEXT NOT NULL DEFAULT '';
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS is_bot BOOLEAN NOT NULL DEFAULT false;
-    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email TEXT;
-    ALTER TABLE profiles ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false;
+    /* Phase 2.1: no email columns on fresh installs. Older databases keep
+     * their (now unused) email/email_verified columns and account_tokens
+     * table — deliberately NOT dropped, so the migration loses no data. */
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS totp_secret TEXT;
     ALTER TABLE profiles ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false;
-    CREATE UNIQUE INDEX IF NOT EXISTS profiles_email_unique_idx ON profiles(lower(email)) WHERE email IS NOT NULL;
     CREATE TABLE IF NOT EXISTS servers (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
@@ -372,18 +373,6 @@ async function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS files_unattached_idx ON files(created_at) WHERE message_id IS NULL AND dm_message_id IS NULL;
     ALTER TABLE files ADD COLUMN IF NOT EXISTS storage_key TEXT;
-    CREATE TABLE IF NOT EXISTS account_tokens (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-      purpose TEXT NOT NULL CHECK (purpose IN ('verify_email','password_reset')),
-      token_hash TEXT NOT NULL,
-      email TEXT,
-      expires_at TIMESTAMPTZ NOT NULL,
-      used_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS account_tokens_hash_idx ON account_tokens(token_hash);
-    CREATE INDEX IF NOT EXISTS account_tokens_user_idx ON account_tokens(user_id, purpose);
     CREATE TABLE IF NOT EXISTS recovery_codes (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
@@ -468,88 +457,8 @@ async function cleanupOrphanFiles() {
   } catch (e) { console.error("Orphan file cleanup failed:", e.message); }
 }
 
-/* ---------- Phase 2: account tokens + mail delivery ---------- */
-const TOKEN_TTL = { verify_email: "24 hours", password_reset: "1 hour" };
+/* ---------- Phase 2: recovery codes (2FA) ---------- */
 const sha256Hex = s => crypto.createHash("sha256").update(String(s)).digest("hex");
-
-function appBaseUrl(req) {
-  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/+$/, "");
-  return `${req.protocol}://${req.get("host")}`;
-}
-
-/* Issue a fresh single-use token: any still-unused tokens for the same
- * user+purpose are burned first. Only the SHA-256 hash is stored. Returns the
- * raw token (shown to the user exactly once, inside the emailed link). */
-async function issueAccountToken(userId, purpose, email) {
-  const raw = crypto.randomBytes(32).toString("base64url");
-  await pool.query("UPDATE account_tokens SET used_at=NOW() WHERE user_id=$1 AND purpose=$2 AND used_at IS NULL", [userId, purpose]);
-  await pool.query(
-    `INSERT INTO account_tokens(user_id,purpose,token_hash,email,expires_at)
-     VALUES($1,$2,$3,$4, NOW() + $5::interval)`,
-    [userId, purpose, sha256Hex(raw), email || null, TOKEN_TTL[purpose]]);
-  return raw;
-}
-
-/* Atomically burn a token and return its row, or null when the token is
- * unknown / already used / expired. For verify_email the token only works
- * while the account still has the address it was issued for. */
-async function consumeAccountToken(raw, purpose) {
-  if (!raw || typeof raw !== "string" || raw.length > 200) return null;
-  const hash = sha256Hex(raw);
-  if (purpose === "verify_email") {
-    const r = await pool.query(`
-      UPDATE account_tokens t SET used_at=NOW() FROM profiles p
-      WHERE t.token_hash=$1 AND t.purpose='verify_email' AND t.used_at IS NULL AND t.expires_at>NOW()
-        AND p.id=t.user_id AND p.email IS NOT NULL AND lower(p.email)=lower(t.email)
-      RETURNING t.user_id, t.email`, [hash]);
-    return r.rows[0] || null;
-  }
-  const r = await pool.query(`
-    UPDATE account_tokens SET used_at=NOW()
-    WHERE token_hash=$1 AND purpose=$2 AND used_at IS NULL AND expires_at>NOW()
-    RETURNING user_id, email`, [hash, purpose]);
-  return r.rows[0] || null;
-}
-
-/* Send an account email, honestly: when no mail transport is configured the
- * link is written to the server log (visible in Render's log stream / local
- * console) and the caller can tell the user email isn't configured. Delivery
- * errors are logged the same way — success is never faked. */
-async function deliverAccountEmail(req, { to, subject, text, actionUrl }) {
-  try {
-    const r = await mailer.sendMail({ to, subject, text });
-    if (!r.delivered) {
-      console.log(`[talkz mail] Email is not configured on this server — nothing was sent to ${to}. Action link (server log only): ${actionUrl}`);
-      return { sent: false, configured: false };
-    }
-    return { sent: true, configured: true };
-  } catch (e) {
-    console.error(`[talkz mail] Delivery to ${to} failed: ${e.message}. Action link (server log only): ${actionUrl}`);
-    return { sent: false, configured: true, error: true };
-  }
-}
-
-async function sendVerificationEmail(req, user) {
-  const raw = await issueAccountToken(user.id, "verify_email", user.email);
-  const url = `${appBaseUrl(req)}/?verify=${raw}`;
-  return deliverAccountEmail(req, {
-    to: user.email,
-    subject: "Verify your Talkz email",
-    text: `Hi ${user.display_name},\n\nConfirm this email address for your Talkz account @${user.username}:\n${url}\n\nThe link works once and expires in 24 hours. If you didn't create this account, you can ignore this email.\n`,
-    actionUrl: url
-  });
-}
-
-async function sendPasswordResetEmail(req, user) {
-  const raw = await issueAccountToken(user.id, "password_reset", user.email);
-  const url = `${appBaseUrl(req)}/?reset=${raw}`;
-  return deliverAccountEmail(req, {
-    to: user.email,
-    subject: "Reset your Talkz password",
-    text: `Hi ${user.display_name},\n\nReset the password for your Talkz account @${user.username}:\n${url}\n\nThe link works once and expires in 1 hour. If you didn't ask for this, you can ignore this email — your password stays unchanged.\n`,
-    actionUrl: url
-  });
-}
 
 /* Recovery codes: 10 codes like "a1b2c-3d4e5", shown once at enable time.
  * Only SHA-256 hashes of the normalised code (lowercase, no dash) are stored. */
@@ -588,38 +497,28 @@ app.post("/api/auth/register", authLimiter, asyncRoute(async (req, res) => {
   const username = clean(req.body.username, 24).toLowerCase();
   const displayName = clean(req.body.displayName || req.body.username, 32);
   const password = String(req.body.password || "");
-  const email = req.body.email ? clean(req.body.email, 254).toLowerCase() : null;
   if (!/^[a-z0-9_]{3,24}$/.test(username)) return res.status(400).json({ error: "Username must be 3-24 characters using letters, numbers, or underscores." });
   if (username === "deleted-bot" || username === "deleted-user") return res.status(400).json({ error: "That username is reserved." });
   if (password.length < 10 || password.length > 72) return res.status(400).json({ error: "Password must be between 10 and 72 characters." });
   if (displayName.length < 1) return res.status(400).json({ error: "Enter a display name." });
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email address doesn't look valid." });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const passwordHash = await bcrypt.hash(password, 12);
     const inserted = await client.query(
-      "INSERT INTO profiles(username,display_name,password_hash,email) VALUES($1,$2,$3,$4) RETURNING id,username,display_name,status_text,created_at,is_bot,email,email_verified,totp_enabled",
-      [username, displayName, passwordHash, email]);
+      "INSERT INTO profiles(username,display_name,password_hash) VALUES($1,$2,$3) RETURNING id,username,display_name,status_text,created_at,is_bot,totp_enabled",
+      [username, displayName, passwordHash]);
     const user = inserted.rows[0];
     const starter = await createStarterServer(client, user.id, displayName);
     await client.query("COMMIT");
-    // Phase 2 — verification email when an address was given. A mail failure
-    // (or no mail configured) never blocks the signup; the state is reported
-    // in the response and the link is in the server log.
-    let emailVerification = null;
-    if (email) {
-      const d = await sendVerificationEmail(req, user);
-      emailVerification = { sent: d.sent, configured: d.configured };
-    }
     req.session.userId = user.id;
     req.session.save(err => {
       if (err) return res.status(500).json({ error: "Account created, but session could not be saved. Please sign in." });
-      res.status(201).json({ user: userPrivate(user), starterServerId: starter.id, emailVerification });
+      res.status(201).json({ user: userPrivate(user), starterServerId: starter.id });
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    if (err.code === "23505") return res.status(409).json({ error: "That username or email is already taken." });
+    if (err.code === "23505") return res.status(409).json({ error: "That username is already taken." });
     throw err;
   } finally { client.release(); }
 }));
@@ -686,55 +585,9 @@ app.post("/api/auth/login/2fa", authLimiter, tokenRequestLimiter, asyncRoute(asy
   });
 }));
 
-/* Phase 2 — email verification. POST is used by the bundled client and the
- * tests; GET is the raw emailed link and lands back on the app with a flag. */
-app.post("/api/auth/verify-email", tokenRequestLimiter, asyncRoute(async (req, res) => {
-  const row = await consumeAccountToken(String(req.body.token || ""), "verify_email");
-  if (!row) return res.status(400).json({ error: "That verification link is invalid or has expired. Request a fresh one from Settings." });
-  await pool.query("UPDATE profiles SET email_verified=true WHERE id=$1", [row.user_id]);
-  res.json({ ok: true });
-}));
-
-app.get("/api/auth/verify-email", tokenRequestLimiter, asyncRoute(async (req, res) => {
-  const row = await consumeAccountToken(String(req.query.token || ""), "verify_email");
-  if (row) await pool.query("UPDATE profiles SET email_verified=true WHERE id=$1", [row.user_id]);
-  res.redirect(`/?verified=${row ? "1" : "0"}`);
-}));
-
-app.post("/api/auth/resend-verification", requireAuth, resendLimiter, asyncRoute(async (req, res) => {
-  const me = await pool.query("SELECT id,username,display_name,email,email_verified FROM profiles WHERE id=$1", [req.session.userId]);
-  const user = me.rows[0];
-  if (!user?.email) return res.status(400).json({ error: "Add an email address to your account first." });
-  if (user.email_verified) return res.json({ ok: true, alreadyVerified: true });
-  const d = await sendVerificationEmail(req, user);
-  res.json({ ok: true, sent: d.sent, configured: d.configured });
-}));
-
-/* Phase 2 — password reset request. The response is byte-identical whether
- * or not the email belongs to an account, so it can't be used to enumerate
- * registered addresses. */
-app.post("/api/auth/forgot-password", tokenRequestLimiter, asyncRoute(async (req, res) => {
-  const email = req.body.email ? clean(req.body.email, 254).toLowerCase() : "";
-  const generic = { ok: true, message: "If an account uses that email, a password reset link is on its way." };
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    const r = await pool.query("SELECT id,username,display_name,email FROM profiles WHERE lower(email)=$1 AND is_bot=false", [email]);
-    if (r.rowCount) await sendPasswordResetEmail(req, r.rows[0]);
-  }
-  res.json(generic);
-}));
-
-app.post("/api/auth/reset-password", tokenRequestLimiter, asyncRoute(async (req, res) => {
-  const password = String(req.body.password || "");
-  if (password.length < 10 || password.length > 72) return res.status(400).json({ error: "Password must be between 10 and 72 characters." });
-  const row = await consumeAccountToken(String(req.body.token || ""), "password_reset");
-  if (!row) return res.status(400).json({ error: "That reset link is invalid or has expired. Request a fresh one." });
-  const passwordHash = await bcrypt.hash(password, 12);
-  await pool.query("UPDATE profiles SET password_hash=$2 WHERE id=$1", [row.user_id, passwordHash]);
-  // A reset ends every other session for the account (stolen-password hygiene).
-  await pool.query("DELETE FROM user_sessions WHERE sess->>'userId'=$1", [row.user_id]);
-  io.in(`user:${row.user_id}`).disconnectSockets(true);
-  res.json({ ok: true });
-}));
+/* Email routes (verify-email, resend-verification, forgot-password,
+ * reset-password) were removed in Phase 2.1 with the rest of the email
+ * features — they now fall through to the JSON 404 for unknown /api routes. */
 
 app.post("/api/auth/logout", requireAuth, (req, res, next) => {
   req.session.destroy(err => {
@@ -757,7 +610,7 @@ app.post("/api/auth/logout-all", requireAuth, asyncRoute(async (req, res) => {
 
 app.get("/api/me", asyncRoute(async (req, res) => {
   if (!req.session.userId) return res.json({ user: null });
-  const result = await pool.query("SELECT id,username,display_name,status_text,created_at,is_bot,email,email_verified,totp_enabled FROM profiles WHERE id=$1", [req.session.userId]);
+  const result = await pool.query("SELECT id,username,display_name,status_text,created_at,is_bot,totp_enabled FROM profiles WHERE id=$1", [req.session.userId]);
   res.json({ user: result.rows[0] ? userPrivate(result.rows[0]) : null });
 }));
 
@@ -765,32 +618,30 @@ app.patch("/api/me", requireAuth, messageLimiter, asyncRoute(async (req, res) =>
   const displayName = clean(req.body.displayName, 32);
   const statusText = clean(req.body.statusText, 60);
   if (!displayName) return res.status(400).json({ error: "Display name can't be empty." });
-  /* Phase 2 — optional email set/change in the same request. A changed address
-   * goes back to unverified and gets a fresh verification email. */
-  let email, emailChanged = false;
-  if (req.body.email !== undefined) {
-    email = req.body.email ? clean(req.body.email, 254).toLowerCase() : null;
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "That email address doesn't look valid." });
-    const cur = await pool.query("SELECT email FROM profiles WHERE id=$1", [req.session.userId]);
-    emailChanged = (cur.rows[0]?.email || null) !== email;
-  }
-  let r;
-  try {
-    r = emailChanged
-      ? await pool.query("UPDATE profiles SET display_name=$2,status_text=$3,email=$4,email_verified=false WHERE id=$1 RETURNING id,username,display_name,status_text,created_at,is_bot,email,email_verified,totp_enabled", [req.session.userId, displayName, statusText, email])
-      : await pool.query("UPDATE profiles SET display_name=$2,status_text=$3 WHERE id=$1 RETURNING id,username,display_name,status_text,created_at,is_bot,email,email_verified,totp_enabled", [req.session.userId, displayName, statusText]);
-  } catch (e) {
-    if (e.code === "23505") return res.status(409).json({ error: "That email is already used by another account." });
-    throw e;
-  }
+  const r = await pool.query("UPDATE profiles SET display_name=$2,status_text=$3 WHERE id=$1 RETURNING id,username,display_name,status_text,created_at,is_bot,totp_enabled", [req.session.userId, displayName, statusText]);
   const rooms = await pool.query("SELECT server_id FROM server_members WHERE user_id=$1", [req.session.userId]);
   rooms.rows.forEach(x => emitServerChanged(x.server_id));
-  let emailVerification = null;
-  if (emailChanged && email) {
-    const d = await sendVerificationEmail(req, r.rows[0]);
-    emailVerification = { sent: d.sent, configured: d.configured };
-  }
-  res.json({ user: userPrivate(r.rows[0]), emailVerification });
+  res.json({ user: userPrivate(r.rows[0]) });
+}));
+
+/* Change password (Phase 2.1) — signed-in, current-password confirmed. With
+ * email gone there is no emailed reset link, so this is the way a password
+ * is rotated; a forgotten password can only be reset by the server operator
+ * directly in the database. A successful change ends every OTHER session
+ * for the account (the hygiene the old email reset flow had). */
+app.post("/api/me/password", requireAuth, authLimiter, asyncRoute(async (req, res) => {
+  const current = String(req.body.currentPassword || "");
+  const next = String(req.body.newPassword || "");
+  if (next.length < 10 || next.length > 72) return res.status(400).json({ error: "New password must be between 10 and 72 characters." });
+  const me = await pool.query("SELECT password_hash FROM profiles WHERE id=$1", [req.session.userId]);
+  if (!me.rowCount || !(await bcrypt.compare(current, me.rows[0].password_hash))) return res.status(401).json({ error: "Current password is incorrect." });
+  if (await bcrypt.compare(next, me.rows[0].password_hash)) return res.status(400).json({ error: "That's already your password — pick a different one." });
+  const passwordHash = await bcrypt.hash(next, 12);
+  await pool.query("UPDATE profiles SET password_hash=$2 WHERE id=$1", [req.session.userId, passwordHash]);
+  const r = await pool.query("DELETE FROM user_sessions WHERE sess->>'userId'=$1 AND sid<>$2", [req.session.userId, req.sessionID]);
+  io.in(`user:${req.session.userId}`).disconnectSockets(false);
+  // The current socket was disconnected too; the client reconnects with its still-valid session cookie.
+  res.json({ ok: true, sessionsEnded: r.rowCount });
 }));
 
 /* ---------- Phase 2: two-factor management ---------- */
@@ -1619,4 +1470,4 @@ if (require.main === module) {
   process.on("SIGTERM", async () => { server.close(); await pool.end(); });
 }
 
-module.exports = { app, server, io, pool, initializeDatabase, cleanupOrphanFiles, encodeCursor, decodeCursor, canView, RANK, mailer, totp, storage };
+module.exports = { app, server, io, pool, initializeDatabase, cleanupOrphanFiles, encodeCursor, decodeCursor, canView, RANK, totp, storage };

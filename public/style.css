@@ -113,3 +113,36 @@
 [tabindex]:focus-visible,.channel-item:focus-visible,.member:focus-visible{outline:2px solid #b3a4ff;outline-offset:-2px}
 .modal select:focus-visible,.modal input:focus-visible{outline:2px solid #b3a4ff;outline-offset:1px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;scroll-behavior:auto!important}}
+
+/* ===== Phase 2.1 — scrollbars: visible, styled, and every pane scrolls ===== */
+/* Thin themed bars everywhere (Firefox + WebKit/Chromium). Before this the
+ * app had NO scrollbar styling at all, so bars were invisible overlays on
+ * most phones/browsers and you couldn't tell a pane could scroll. */
+*{scrollbar-width:thin;scrollbar-color:#4c4d63 transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#4c4d63;border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:#8b72f8}
+::-webkit-scrollbar-corner{background:transparent}
+/* Server rail is only 70px wide: give it a slim bar so icons keep their room. */
+.servers{scrollbar-width:thin}
+.servers::-webkit-scrollbar{width:5px}
+.servers::-webkit-scrollbar-thumb{border:0}
+/* Real scroll fixes, not just paint:
+ * - .modal had no max-height/overflow, so long dialogs (Settings, 2FA)
+ *   ran off the screen and their bottom buttons were unreachable. It now
+ *   caps at the viewport and scrolls itself; the layer can scroll too.
+ * - .channel-list had overflow:auto nested inside .side-scroll, which
+ *   trapped the wheel and drew a second bar — .side-scroll is the one
+ *   scroller for the sidebar now.
+ * - grid/flex panes get min-height:0 + overscroll containment so a pane
+ *   scrolls its own content instead of chaining to whatever is behind it. */
+.modal-layer{overflow-y:auto}
+.modal{max-height:calc(100dvh - 36px);overflow-y:auto;overscroll-behavior:contain}
+.channel-list{overflow:visible}
+.channels,.chat,.members{min-height:0}
+.messages{min-height:0;overscroll-behavior:contain;scrollbar-gutter:stable}
+.side-scroll{overscroll-behavior:contain;scrollbar-gutter:stable}
+.members{overscroll-behavior:contain}
+.auth-screen{overflow-y:auto}
+.emoji-pop{max-height:min(320px,60dvh);overflow-y:auto}

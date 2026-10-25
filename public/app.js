@@ -6,7 +6,7 @@ const state = {
   user:null, servers:[], serverId:null, channelId:null, mode:"server",
   dms:[], dmId:null, dmUnread:new Set(), messages:[], hasMore:false, members:[],
   socket:null, authMode:"login", memberPanel:window.matchMedia("(min-width:1101px)").matches,
-  replyTo:null, editingId:null, search:"", typing:new Map(), voiceUsers:{}, nextCursor:null, pending:[], resetToken:null
+  replyTo:null, editingId:null, search:"", typing:new Map(), voiceUsers:{}, nextCursor:null, pending:[]
 };
 const voice = { channelId:null, stream:null, peers:new Map(), muted:false, deafened:false, speaking:false, analyser:null, levelTimer:null, iceCache:null, iceAt:0 };
 let pendingInvite = new URLSearchParams(location.search).get("invite");
@@ -60,9 +60,7 @@ const formatDate=d=>new Date(d).toLocaleString([],{month:"short",day:"numeric",h
 /* ---------- auth ---------- */
 const AUTH_VIEWS={
   login:{title:"Welcome back",sub:"Sign in and pick up where you left off.",submit:"Sign in",fields:["username","password"]},
-  register:{title:"Create your Talkz account",sub:"Your people. Your place. Let's get you set up.",submit:"Create account",fields:["username","displayName","email","password"]},
-  forgot:{title:"Reset your password",sub:"Enter the email on your account and we'll send you a reset link.",submit:"Email me a reset link",fields:["email"]},
-  reset:{title:"Set a new password",sub:"Choose a new password for your account.",submit:"Set new password",fields:["password"]},
+  register:{title:"Create your Talkz account",sub:"Your people. Your place. Let's get you set up.",submit:"Create account",fields:["username","displayName","password"]},
   "2fa":{title:"Two-factor check",sub:"Enter the 6-digit code from your authenticator app — or one of your recovery codes.",submit:"Verify and sign in",fields:["code"]}
 };
 function showAuth(mode="login"){
@@ -71,39 +69,29 @@ function showAuth(mode="login"){
   const show=(id,on)=>$(id).classList.toggle("hidden",!on);
   show("usernameWrap",v.fields.includes("username"));
   show("displayNameWrap",v.fields.includes("displayName"));
-  show("emailWrap",v.fields.includes("email"));
   show("passwordWrap",v.fields.includes("password"));
   show("codeWrap",v.fields.includes("code"));
   $("username").required=v.fields.includes("username");
   $("password").required=v.fields.includes("password");
   $("displayName").required=mode==="register";
   $("authCode").required=mode==="2fa";
-  $("password").autocomplete=(mode==="register"||mode==="reset")?"new-password":"current-password";
+  $("password").autocomplete=mode==="register"?"new-password":"current-password";
   $("switchCopy").textContent=mode==="register"?"Already have an account?":"New to Talkz?";
   $("switchAuth").textContent=mode==="register"?"Sign in":"Create an account";
-  $("forgotLink").classList.toggle("hidden",mode!=="login");
   $("authError").classList.add("hidden");
   $("authScreen").classList.remove("hidden");$("app").classList.add("hidden");
 }
 function authError(message){$("authError").textContent=message;$("authError").classList.remove("hidden")}
 $("switchAuth").onclick=()=>showAuth(state.authMode==="login"?"register":"login");
-$("forgotLink").onclick=()=>showAuth("forgot");
 $("authForm").addEventListener("submit",async e=>{
   e.preventDefault();const mode=state.authMode;
   $("authSubmit").disabled=true;$("authSubmit").textContent="Please wait…";$("authError").classList.add("hidden");
   try{
     if(mode==="register"){
-      const body={username:$("username").value.trim(),password:$("password").value,displayName:$("displayName").value.trim()||$("username").value.trim(),email:$("email").value.trim()||undefined};
+      const body={username:$("username").value.trim(),password:$("password").value,displayName:$("displayName").value.trim()||$("username").value.trim()};
       const data=await send("/api/auth/register","POST",body);
       state.user=data.user;
-      if(data.emailVerification)toast(data.emailVerification.sent?"Account created — check your email to verify your address.":"Account created. Email isn't configured on this server, so no verification email was sent.");
       await startApp();
-    }else if(mode==="forgot"){
-      await send("/api/auth/forgot-password","POST",{email:$("email").value.trim()});
-      showAuth("login");toast("If an account uses that email, a password reset link is on its way.");
-    }else if(mode==="reset"){
-      await send("/api/auth/reset-password","POST",{token:state.resetToken,password:$("password").value});
-      state.resetToken=null;showAuth("login");toast("Password updated. Sign in with your new password.");
     }else if(mode==="2fa"){
       const data=await send("/api/auth/login/2fa","POST",{code:$("authCode").value.trim()});
       state.user=data.user;await startApp();
@@ -502,19 +490,12 @@ function openInvite(){
 function openSettings(){
   openForm({title:"Profile settings",fields:[{id:"displayName",label:"DISPLAY NAME",value:state.user.displayName,max:32},{id:"statusText",label:"STATUS",value:state.user.statusText,placeholder:"What are you up to?",max:60}],submit:"Save changes",
     onSubmit:async v=>{const d=await send("/api/me","PATCH",{displayName:v.displayName,statusText:v.statusText});state.user=d.user;updateProfileUi();toast("Profile updated.")},
-    extra:`<div class="or-divider"><span>email &amp; security</span></div><p>${state.user.email?`Email: <b>${esc(state.user.email)}</b> — ${state.user.emailVerified?"verified ✓":"not verified yet"}`:"No email on this account. Add one to enable password resets."}</p><div class="menu-list"><button type="button" id="setEmail">${state.user.email?"Change email":"Add email"}</button>${state.user.email&&!state.user.emailVerified?'<button type="button" id="setResend">Resend verification email</button>':""}<button type="button" id="set2fa">${state.user.totpEnabled?"Disable two-factor authentication":"Enable two-factor authentication"}</button></div><div class="or-divider"><span>account</span></div><div class="menu-list"><button type="button" id="setUsername">Change username (@${esc(state.user.username)})</button><button type="button" id="setLogoutAll">Log out of all devices</button><button type="button" class="danger-text" id="setDelete">Delete account</button></div>`,
+    extra:`<div class="or-divider"><span>security</span></div><div class="menu-list"><button type="button" id="setPassword">Change password</button><button type="button" id="set2fa">${state.user.totpEnabled?"Disable two-factor authentication":"Enable two-factor authentication"}</button></div><div class="or-divider"><span>account</span></div><div class="menu-list"><button type="button" id="setUsername">Change username (@${esc(state.user.username)})</button><button type="button" id="setLogoutAll">Log out of all devices</button><button type="button" class="danger-text" id="setDelete">Delete account</button></div>`,
     bind:()=>{
-      $("setEmail").onclick=()=>openForm({title:state.user.email?"Change email":"Add email",desc:"Used for email verification and password resets. Changing it sends a fresh verification link and marks the address unverified until you confirm it. Leave it empty to remove the address.",
-        fields:[{id:"email",label:"EMAIL",value:state.user.email||"",placeholder:"you@example.com",max:254}],submit:"Save email",
-        onSubmit:async v=>{const d=await send("/api/me","PATCH",{displayName:state.user.displayName,statusText:state.user.statusText,email:v.email});state.user=d.user;updateProfileUi();
-          if(d.emailVerification)toast(d.emailVerification.sent?"Verification email sent — check your inbox.":"Email saved. Email isn't configured on this server, so no verification email was sent.");
-          else toast("Email saved.")}});
-      const resendBtn=$("setResend");
-      if(resendBtn)resendBtn.onclick=async()=>{try{const d=await send("/api/auth/resend-verification","POST");
-        if(d.alreadyVerified)toast("That email is already verified.");
-        else if(d.sent)toast("Verification email sent — check your inbox.");
-        else toast("Email isn't configured on this server, so nothing was sent. The link is in the server log.");
-        closeModal()}catch(err){modalError(err.message)}};
+      $("setPassword").onclick=()=>openForm({title:"Change password",desc:"Confirm your current password and pick a new one. You stay signed in here; every other session for your account is ended. There's no email reset — if you forget your password, only the server operator can restore access.",
+        fields:[{id:"current",label:"CURRENT PASSWORD",max:72},{id:"next",label:"NEW PASSWORD",max:72,placeholder:"At least 10 characters"}],submit:"Change password",
+        onSubmit:async v=>{const d=await send("/api/me/password","POST",{currentPassword:v.current,newPassword:v.next});toast(d.sessionsEnded?`Password changed — ${d.sessionsEnded} other session(s) signed out.`:"Password changed.")},
+        bind:()=>{$("f_current").type="password";$("f_next").type="password"}});
       $("set2fa").onclick=()=>{
         if(state.user.totpEnabled){
           openForm({title:"Disable two-factor",desc:"Confirm with your password and a current authenticator or recovery code.",
@@ -791,19 +772,6 @@ $("membersBtn").onclick=()=>{state.memberPanel=!state.memberPanel;$("app").class
 $("emojiBtn").onclick=e=>openEmoji(e.currentTarget,em=>{const i=$("messageInput");i.value+=em;i.focus()});
 
 (async()=>{
-  /* Phase 2 — emailed links land back here: ?verify=<token> confirms the
-   * address, ?reset=<token> opens the new-password form, ?verified=1/0 is
-   * the result flag from the raw link endpoint. Tokens are scrubbed from
-   * the URL straight away so they don't linger in history. */
-  const params=new URLSearchParams(location.search);
-  const verifyToken=params.get("verify"),resetToken=params.get("reset"),verified=params.get("verified");
-  if(verifyToken||resetToken||verified)history.replaceState(null,"",location.pathname+(pendingInvite?`?invite=${encodeURIComponent(pendingInvite)}`:""));
-  if(verifyToken){
-    try{await send("/api/auth/verify-email","POST",{token:verifyToken});toast("Email verified. Thanks!")}
-    catch{toast("That verification link is invalid or has expired.")}
-  }else if(verified==="1")toast("Email verified. Thanks!");
-  else if(verified==="0")toast("That verification link is invalid or has expired.");
-  if(resetToken){state.resetToken=resetToken;showAuth("reset");return}
   try{const data=await api("/api/me");if(data.user){state.user=data.user;await startApp()}else{showAuth(pendingInvite?"register":"login")}}
   catch(e){showAuth("login");authError("Talkz Cloud could not connect to the server. Check your deployment and refresh.")}
 })();
