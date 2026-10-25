@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#171821"><title>Talkz Cloud</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="authScreen" class="auth-screen">
+  <div class="auth-brand"><div class="brand-mark">T</div><div><b>Talkz</b><small>YOUR PEOPLE. YOUR PLACE.</small></div></div>
+  <section class="auth-card">
+    <div class="auth-badge">☁ TALKZ CLOUD</div>
+    <h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in and pick up where you left off.</p>
+    <form id="authForm">
+      <div id="usernameWrap"><label for="username">USERNAME</label><input id="username" name="username" autocomplete="username" minlength="3" maxlength="24" required placeholder="your_username"></div>
+      <div id="displayNameWrap" class="hidden"><label for="displayName">DISPLAY NAME</label><input id="displayName" name="displayName" maxlength="32" placeholder="What people call you"></div>
+      <div id="emailWrap" class="hidden"><label for="email">EMAIL (OPTIONAL)</label><input id="email" name="email" type="email" maxlength="254" placeholder="you@example.com" autocomplete="email"></div>
+      <div id="passwordWrap"><label for="password">PASSWORD</label><input id="password" name="password" type="password" autocomplete="current-password" minlength="10" required placeholder="At least 10 characters"></div>
+      <div id="codeWrap" class="hidden"><label for="authCode">AUTHENTICATION CODE</label><input id="authCode" name="authCode" inputmode="text" autocomplete="one-time-code" maxlength="32" placeholder="123456 or a recovery code"></div>
+      <button class="primary auth-submit" id="authSubmit">Sign in</button>
+    </form>
+    <div id="authError" class="auth-error hidden"></div>
+    <p class="auth-switch"><span id="switchCopy">New to Talkz?</span> <button id="switchAuth" type="button">Create an account</button></p>
+    <p class="auth-switch"><button id="forgotLink" type="button">Forgot your password?</button></p>
+    <div class="auth-foot"><span class="live-dot"></span> Talkz Cloud · connected to your community</div>
+  </section>
+</div>
+
+<div id="app" class="app hidden">
+  <aside class="servers">
+    <button class="server-icon brand-mini active" id="homeBtn" aria-label="Direct messages" title="Direct messages">T<i id="homeBadge" class="badge hidden"></i></button>
+    <div class="server-divider"></div><div id="serverList" class="server-list"></div>
+    <button class="server-icon add" id="addServer" aria-label="Create or join a server" title="Create or join a server">＋</button>
+  </aside>
+
+  <aside class="channels">
+    <header class="workspace-head"><button id="workspaceName" class="workspace-name">Talkz <span>⌄</span></button><span class="cloud-status"><i></i> CLOUD</span></header>
+    <div id="sideScroll" class="side-scroll">
+      <div id="serverSide">
+        <div class="section-label"><span>TEXT CHANNELS</span><button id="addChannel" aria-label="Create channel" title="Create channel">＋</button></div>
+        <div id="channelList" class="channel-list"></div>
+        <div class="section-label"><span>VOICE CHANNELS</span><button id="addVoice" aria-label="Create voice channel" title="Create voice channel">＋</button></div>
+        <div id="voiceList" class="channel-list"></div>
+      </div>
+      <div id="homeSide" class="hidden">
+        <div class="section-label"><span>DIRECT MESSAGES</span><button id="addDm" aria-label="New direct message" title="New message">＋</button></div>
+        <div id="dmList" class="channel-list"></div>
+      </div>
+    </div>
+    <div id="voiceBar" class="voice-bar hidden">
+      <div class="voice-info"><span class="live-dot"></span><div><b>Voice connected</b><small id="voiceName">Lounge</small></div></div>
+      <div class="voice-controls">
+        <button id="muteBtn" aria-label="Mute microphone" title="Mute microphone">🎙</button>
+        <button id="deafenBtn" aria-label="Deafen" title="Deafen">🎧</button>
+        <button id="hangupBtn" aria-label="Disconnect from voice" class="danger" title="Disconnect">✕</button>
+      </div>
+    </div>
+    <div class="profile-line"><div class="avatar me-avatar" id="myAvatar">Y</div><div class="profile-meta"><b id="myName">You</b><small id="myHandle">@you</small></div><button id="settingsBtn" aria-label="Profile and account settings" title="Profile settings">⚙</button><button id="logoutBtn" aria-label="Sign out" title="Sign out">↪</button></div>
+  </aside>
+
+  <main class="chat">
+    <header class="chat-head">
+      <button class="icon-btn mobile-only" id="menuBtn" aria-label="Toggle channel list" title="Channels">☰</button>
+      <div class="channel-title"><span id="channelHash">#</span><strong id="chatTitle">general</strong><span class="head-divider"></span><span id="topic">The place for everything.</span></div>
+      <div class="head-actions">
+        <input id="searchInput" class="search" type="search" placeholder="Search" maxlength="100" aria-label="Search messages">
+        <span class="sync-label"><i></i> LIVE</span>
+        <button class="icon-btn" id="membersBtn" aria-label="Toggle member list" title="Toggle members">♙</button>
+      </div>
+    </header>
+    <div class="chat-body">
+      <div id="searchBanner" class="search-banner hidden"><span id="searchText"></span><button id="clearSearch" type="button">Clear search</button></div>
+      <section id="messages" class="messages"></section>
+      <div id="welcome" class="welcome hidden"><div class="welcome-mark">T</div><h2>Welcome to <span>Talkz Cloud</span></h2><p>This is the beginning of this conversation. Say something!</p></div>
+      <div id="typing" class="typing"></div>
+      <div id="replyBar" class="reply-bar hidden"><span id="replyText"></span><button id="cancelReply" aria-label="Cancel reply" type="button" title="Cancel reply">×</button></div>
+      <div id="attachBar" class="attach-bar hidden"></div>
+      <form id="composer" class="composer"><button type="button" class="composer-plus" id="attachBtn" title="Attach a file" aria-label="Attach a file">＋</button><button type="button" class="composer-plus" id="emojiBtn" title="Add emoji" aria-label="Add emoji">☺</button><input id="messageInput" maxlength="2000" autocomplete="off" placeholder="Message #general" aria-label="Message"><input id="fileInput" type="file" class="hidden" aria-label="Choose a file to attach"><button type="submit" class="send-btn" title="Send message" aria-label="Send message">➤</button></form>
+      <div class="composer-hint">**bold** · *italic* · `code` · ~~strike~~ · image links embed</div>
+    </div>
+  </main>
+  <aside id="membersPanel" class="members" aria-label="Server members"><div class="members-title">MEMBERS</div><div id="memberList"></div></aside>
+</div>
+
+<div id="toast" class="toast" role="status"></div>
+<div id="emojiPop" class="emoji-pop hidden"></div>
+<div id="modalLayer" class="modal-layer hidden"><section class="modal" role="dialog" aria-modal="true"><button id="modalClose" aria-label="Close dialog" class="modal-close">×</button><div id="modalContent"></div></section></div>
+<div id="audioHost" class="hidden"></div>
+<script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+</body></html>
